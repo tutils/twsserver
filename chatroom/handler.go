@@ -32,14 +32,14 @@ func (h *handler) OnOpen(cli twsserver.Client) error {
 	})
 
 	go func() {
-		defer log.Debug("waitLogin complete")
+		//defer log.Debug("waitLogin complete")
 		select {
 		case uid := <-loginDone:
 			h.room.Login(cli, uid)
-			log.Debugf("client logged in succ, uid: %v", uid)
+			//log.Debugf("client logged in succ, uid: %v", uid)
 			return
 		case <-time.After(LoginTimeout):
-			log.Error("client hasnot logged in for a long time")
+			//log.Error("client hasnot logged in for a long time")
 			cli.Close()
 			return
 		}
