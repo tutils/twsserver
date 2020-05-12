@@ -1,0 +1,5 @@
+.idea
+*.pb.go
+*.pb.micro.go
+*-srv
+*-web
