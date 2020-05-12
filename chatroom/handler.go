@@ -3,7 +3,6 @@ package chatroom
 import (
 	"errors"
 	"github.com/tutils/twsserver"
-	"log"
 	"net/http"
 	"time"
 )
