@@ -266,6 +266,7 @@ func (c *client) run() error {
 				//log.Error(err)
 				return err
 			}
+			buf.Ref(1)
 			c.write(buf, req.data.Immed)
 		}
 	}
