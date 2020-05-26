@@ -134,7 +134,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) writePump() {
-	buf := new(bytes.Buffer)
+	buf := &bytes.Buffer{} // TODO: use wswriter directly
 	for {
 		select {
 		case cli, ok := <-s.ready:

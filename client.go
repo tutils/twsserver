@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/gorilla/websocket"
+	"sync/atomic"
 	"io"
 	"log"
 	"net"
@@ -30,9 +31,9 @@ type ClientGroup interface {
 }
 
 var (
-	leftSB  = []byte("[")
-	rightSB = []byte("]")
-	comma   = []byte(",")
+	leftSB  = &bytesBuffer{b: []byte("[")}
+	rightSB = &bytesBuffer{b: []byte("]")}
+	comma   = &bytesBuffer{b: []byte(",")}
 )
 
 type clientGroup struct {
@@ -64,15 +65,15 @@ func (cg *clientGroup) Write(cmd string, seq int64, data interface{}, code int32
 	}
 
 	log.Println("clientgroup begin to encode")
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(rspData); err != nil {
+	buf := newMultiRefBuffer(int32(len(cg.clients)))
+	if err := json.NewEncoder(buf).Encode(rspData); err != nil {
 		return
 	}
 
 	log.Println("clientgroup begin to write")
 	for _, c := range cg.clients {
 		cli := c.(*client)
-		cli.write(buf.Bytes(), immed)
+		cli.write(buf, immed)
 	}
 	log.Println("clientgroup write complete")
 }
@@ -88,11 +89,10 @@ type client struct {
 	svc         *server
 	conn        *websocket.Conn
 	ctx         context.Context
-	writeq      [][]byte
+	writeq      []multiRefBytesBuffer
 	mu          sync.Mutex
 	closed      bool
 	sendMu      sync.Mutex
-	immedWriter bytes.Buffer
 	recvTimeout time.Duration
 	sendTimeout time.Duration
 }
@@ -135,31 +135,32 @@ func (c *client) Write(cmd string, seq int64, data interface{}, code int32, msg 
 		Data: EncodeData(data),
 	}
 
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(rspData); err != nil {
+	buf := newMultiRefBuffer(1)
+	if err := json.NewEncoder(buf).Encode(rspData); err != nil {
 		return
 	}
-	c.write(buf.Bytes(), immed)
+	c.write(buf, immed)
 }
 
-func (c *client) write(json []byte, immed bool) {
+func (c *client) write(jsonStr multiRefBytesBuffer, immed bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if immed {
-		c.immedWriter.Reset()
-		c.immedWriter.WriteByte(leftSB[0])
-		c.immedWriter.Write(json)
-		c.immedWriter.WriteByte(rightSB[0])
-		c.send(c.immedWriter.Bytes())
+		var buf bytes.Buffer
+		buf.Write(leftSB.Bytes())
+		buf.Write(jsonStr.Bytes())
+		buf.Write(rightSB.Bytes())
+		c.send(buf.Bytes())
+		jsonStr.Unref()
 		return
 	}
 
 	if len(c.writeq) == 0 {
-		c.writeq = append(c.writeq, leftSB, json)
+		c.writeq = append(c.writeq, leftSB, jsonStr)
 		c.svc.ready <- c
 	} else {
-		c.writeq = append(c.writeq, comma, json)
+		c.writeq = append(c.writeq, comma, jsonStr)
 	}
 }
 
@@ -176,9 +177,10 @@ func (c *client) swap(writer io.Writer) (closed bool) {
 	}
 
 	for _, bs := range c.writeq {
-		writer.Write(bs)
+		writer.Write(bs.Bytes())
+		bs.Unref()
 	}
-	writer.Write(rightSB)
+	writer.Write(rightSB.Bytes())
 	c.writeq = c.writeq[:0]
 	return false
 }
@@ -215,8 +217,9 @@ func (c *client) run() error {
 		}
 	}
 
-	var buf bytes.Buffer
-	en := json.NewEncoder(&buf)
+	buf := newMultiRefBuffer(1)
+	defer buf.Unref()
+	en := json.NewEncoder(buf)
 	for {
 		var reqDatas []*RequestData
 		if c.recvTimeout > 0 {
@@ -263,7 +266,7 @@ func (c *client) run() error {
 				//log.Error(err)
 				return err
 			}
-			c.write(buf.Bytes(), req.data.Immed)
+			c.write(buf, req.data.Immed)
 		}
 	}
 }
@@ -285,4 +288,52 @@ func newClient(svc *server, conn *websocket.Conn, recvWait time.Duration, sendWa
 		sendTimeout: sendWait,
 	}
 	return c
+}
+
+type multiRefBytesBuffer interface {
+	Bytes() []byte
+	Ref(num int32)
+	Unref()
+}
+
+type multiRefBuffer struct {
+	bytes.Buffer
+	ref int32 //accessed atomically
+}
+
+func (b *multiRefBuffer) Ref(num int32) {
+	atomic.AddInt32(&b.ref, num)
+}
+
+func (b *multiRefBuffer) Unref () {
+	ref := atomic.AddInt32(&b.ref, -1)
+	if ref <= 0 {
+		if ref < 0 {
+			panic("ref < 0")
+		}
+		b.Reset()
+		jsonStrPoolBuffer.Put(b)
+	}
+}
+
+var jsonStrPoolBuffer = &sync.Pool{New: func() interface{} {return &multiRefBuffer{}}}
+
+func newMultiRefBuffer(ref int32) *multiRefBuffer {
+	buf := jsonStrPoolBuffer.Get().(*multiRefBuffer)
+	buf.Ref(ref)
+	return buf
+}
+
+type bytesBuffer struct {
+	b []byte
+}
+
+func (b *bytesBuffer) Bytes() []byte {
+	return b.b
+}
+
+func (b *bytesBuffer) Ref(num int32) {
+}
+
+func (b *bytesBuffer) Unref() {
 }
