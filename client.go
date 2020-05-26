@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/gorilla/websocket"
-	"sync/atomic"
 	"io"
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -305,7 +305,7 @@ func (b *multiRefBuffer) Ref(num int32) {
 	atomic.AddInt32(&b.ref, num)
 }
 
-func (b *multiRefBuffer) Unref () {
+func (b *multiRefBuffer) Unref() {
 	ref := atomic.AddInt32(&b.ref, -1)
 	if ref <= 0 {
 		if ref < 0 {
@@ -316,7 +316,7 @@ func (b *multiRefBuffer) Unref () {
 	}
 }
 
-var jsonStrPoolBuffer = &sync.Pool{New: func() interface{} {return &multiRefBuffer{}}}
+var jsonStrPoolBuffer = &sync.Pool{New: func() interface{} { return &multiRefBuffer{} }}
 
 func newMultiRefBuffer(ref int32) *multiRefBuffer {
 	buf := jsonStrPoolBuffer.Get().(*multiRefBuffer)
