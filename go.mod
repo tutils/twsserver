@@ -15,5 +15,5 @@ require (
 	github.com/gorilla/websocket v1.4.2
 	github.com/mitchellh/mapstructure v1.3.1
 	go.uber.org/zap v1.15.0 // indirect
-	google.golang.org/genproto v0.0.0-20200521103424-e9a78aa275b7 // indirect
+	google.golang.org/genproto v0.0.0-20200528191852-705c0b31589b // indirect
 )

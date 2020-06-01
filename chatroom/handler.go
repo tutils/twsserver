@@ -23,7 +23,7 @@ func (h *handler) OpUpgrade(req *http.Request) error {
 	return nil
 }
 
-func (h *handler) OnOpen(cli twsserver.Client) error {
+func (h *handler) OnOpen(cli *twsserver.Conn) error {
 	loginDone := make(chan int64)
 	cli.AddContextValue(loginDoneKey{}, loginDone)
 	cli.AddContextValue(clientDataKey{}, &clientData{
@@ -31,14 +31,14 @@ func (h *handler) OnOpen(cli twsserver.Client) error {
 	})
 
 	go func() {
-		//defer log.Debug("waitLogin complete")
+		//defer log.Println("waitLogin complete")
 		select {
 		case uid := <-loginDone:
 			h.room.Login(cli, uid)
-			//log.Debugf("client logged in succ, uid: %v", uid)
+			////log.Printf("client logged in succ, uid: %v", uid)
 			return
 		case <-time.After(LoginTimeout):
-			//log.Error("client hasnot logged in for a long time")
+			//log.Println("client hasnot logged in for a long time")
 			cli.Close()
 			return
 		}
@@ -46,7 +46,7 @@ func (h *handler) OnOpen(cli twsserver.Client) error {
 	return nil
 }
 
-func (h *handler) OnClose(cli twsserver.Client) {
+func (h *handler) OnClose(cli *twsserver.Conn) {
 	h.room.RemoveClient(cli)
 }
 
@@ -61,10 +61,10 @@ func (h *handler) Login(req twsserver.Request, rsp twsserver.Response) error {
 	}
 	uid := request.Uid
 
-	loginDone := req.Client().ContextValue(loginDoneKey{}).(chan int64)
+	loginDone := req.Conn().ContextValue(loginDoneKey{}).(chan int64)
 	loginDone <- uid
 
-	clientData := req.Client().ContextValue(clientDataKey{}).(*clientData)
+	clientData := req.Conn().ContextValue(clientDataKey{}).(*clientData)
 
 	rsp.EncodeData(&LoginRsp{
 		Id: clientData.id,
@@ -79,7 +79,7 @@ func (h *handler) EnterChan(req twsserver.Request, rsp twsserver.Response) error
 		return err
 	}
 
-	h.room.ClientEnterChannel(req.Client(), request.Chans...)
+	h.room.ClientEnterChannel(req.Conn(), request.Chans...)
 
 	rsp.EncodeData(&EnterChanRsp{}, 0, "")
 
@@ -92,7 +92,7 @@ func (h *handler) ExitChan(req twsserver.Request, rsp twsserver.Response) error 
 		return err
 	}
 
-	h.room.ClientExitChannel(req.Client(), request.Chans...)
+	h.room.ClientExitChannel(req.Conn(), request.Chans...)
 
 	rsp.EncodeData(&ExitChanRsp{}, 0, "")
 
@@ -105,12 +105,12 @@ func (h *handler) SendToClient(req twsserver.Request, rsp twsserver.Response) er
 		return err
 	}
 
-	uid, ok := h.room.User(req.Client())
+	uid, ok := h.room.User(req.Conn())
 	if !ok {
 		return twsserver.Error(rsp, ErrNotLogin, "client hasnot logged in", true)
 	}
 
-	id, ok := h.room.ClientId(req.Client())
+	id, ok := h.room.ClientId(req.Conn())
 	if !ok {
 		return twsserver.Fatal(rsp, errors.New("client has no id"))
 	}
@@ -143,12 +143,12 @@ func (h *handler) SendToUser(req twsserver.Request, rsp twsserver.Response) erro
 		return err
 	}
 
-	uid, ok := h.room.User(req.Client())
+	uid, ok := h.room.User(req.Conn())
 	if !ok {
 		return twsserver.Error(rsp, ErrNotLogin, "client hasnot logged in", true)
 	}
 
-	id, ok := h.room.ClientId(req.Client())
+	id, ok := h.room.ClientId(req.Conn())
 	if !ok {
 		return twsserver.Fatal(rsp, errors.New("client has no id"))
 	}
@@ -181,12 +181,12 @@ func (h *handler) SendToChan(req twsserver.Request, rsp twsserver.Response) erro
 		return err
 	}
 
-	uid, ok := h.room.User(req.Client())
+	uid, ok := h.room.User(req.Conn())
 	if !ok {
 		return twsserver.Error(rsp, ErrNotLogin, "client hasnot logged in", true)
 	}
 
-	id, ok := h.room.ClientId(req.Client())
+	id, ok := h.room.ClientId(req.Conn())
 	if !ok {
 		return twsserver.Fatal(rsp, errors.New("client has no id"))
 	}

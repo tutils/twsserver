@@ -14,7 +14,7 @@ type Request interface {
 	Command() string
 	Sequence() int64
 	DecodeData(data interface{}) error
-	Client() Client
+	Conn() *Conn
 }
 
 type Response interface {
@@ -38,11 +38,11 @@ type ResponseData struct {
 
 type request struct {
 	data *RequestData
-	cli  *client
+	conn *Conn
 }
 
-func (req *request) Client() Client {
-	return req.cli
+func (req *request) Conn() *Conn {
+	return req.conn
 }
 
 func (req *request) Command() string {

@@ -19,20 +19,20 @@ func genid() int64 {
 }
 
 type Room struct {
-	clients *BiMap  // id <-> Client
-	where   *BIndex // Client -> channel set, channel -> Client set
-	who     *Index  // uid -> Client set
+	clients *BiMap  // id <-> Conn
+	where   *BIndex // Conn -> channel set, channel -> Conn set
+	who     *Index  // uid -> Conn set
 
 	distribute Distribute
 }
 
-func (r *Room) AddClient(cli twsserver.Client) int64 {
+func (r *Room) AddClient(cli *twsserver.Conn) int64 {
 	id := genid()
 	r.clients.AddPair(id, cli)
 	return id
 }
 
-func (r *Room) Login(cli twsserver.Client, uid int64) {
+func (r *Room) Login(cli *twsserver.Conn, uid int64) {
 	r.who.AddUserTag(uid, cli)
 
 	if r.distribute != nil {
@@ -43,25 +43,25 @@ func (r *Room) Login(cli twsserver.Client, uid int64) {
 	}
 }
 
-func (r *Room) ClientsOfUser(uid int64) (twsserver.ClientGroup, bool) {
+func (r *Room) ClientsOfUser(uid int64) (*twsserver.ConnGroup, bool) {
 	var out []interface{}
 	if ok := r.who.Tags(uid, &out); !ok {
 		return nil, false
 	}
-	return twsserver.NewClientGroup(out), true
+	return twsserver.NewConnGroup(out), true
 }
 
-func (r *Room) ClientsOfUsers(uids []int64) twsserver.ClientGroup {
+func (r *Room) ClientsOfUsers(uids []int64) *twsserver.ConnGroup {
 	uids_ := make([]interface{}, len(uids))
 	for i, uid := range uids {
 		uids_[i] = uid
 	}
 	var out []interface{}
 	r.who.SelectTags(uids_, &out)
-	return twsserver.NewClientGroup(out)
+	return twsserver.NewConnGroup(out)
 }
 
-func (r *Room) RemoveClient(cli twsserver.Client) {
+func (r *Room) RemoveClient(cli *twsserver.Conn) {
 	if r.distribute != nil {
 		if id, ok := r.clients.Key(cli); ok {
 			r.distribute.Unregister(fmt.Sprintf(RegClientKeyFmt, id))
@@ -76,7 +76,7 @@ func (r *Room) RemoveClient(cli twsserver.Client) {
 	r.who.RemoveTag(cli)
 }
 
-func (r *Room) ClientEnterChannel(cli twsserver.Client, chs ...string) {
+func (r *Room) ClientEnterChannel(cli *twsserver.Conn, chs ...string) {
 	chs_ := make([]interface{}, 0, len(chs))
 	for _, ch := range chs {
 		if len(ch) != 0 {
@@ -86,7 +86,7 @@ func (r *Room) ClientEnterChannel(cli twsserver.Client, chs ...string) {
 	r.where.AddUserTag(cli, chs_...)
 }
 
-func (r *Room) ClientExitChannel(cli twsserver.Client, chs ...string) {
+func (r *Room) ClientExitChannel(cli *twsserver.Conn, chs ...string) {
 	chs_ := make([]interface{}, len(chs))
 	for i, ch := range chs {
 		chs_[i] = ch
@@ -94,33 +94,33 @@ func (r *Room) ClientExitChannel(cli twsserver.Client, chs ...string) {
 	r.where.RemoveUserTag(cli, chs_...)
 }
 
-func (r *Room) ClientsInChannel(ch string) (twsserver.ClientGroup, bool) {
+func (r *Room) ClientsInChannel(ch string) (*twsserver.ConnGroup, bool) {
 	var out []interface{}
 	if ok := r.where.Users(ch, &out); !ok {
 		return nil, false
 	}
-	return twsserver.NewClientGroup(out), true
+	return twsserver.NewConnGroup(out), true
 }
 
-func (r *Room) ClientsInChannels(chs []string) twsserver.ClientGroup {
+func (r *Room) ClientsInChannels(chs []string) *twsserver.ConnGroup {
 	chs_ := make([]interface{}, len(chs))
 	for i, ch := range chs {
 		chs_[i] = ch
 	}
 	var out []interface{}
 	r.where.SelectUsers(chs_, &out)
-	return twsserver.NewClientGroup(out)
+	return twsserver.NewConnGroup(out)
 }
 
-func (r *Room) Client(id int64) (twsserver.Client, bool) {
+func (r *Room) Client(id int64) (*twsserver.Conn, bool) {
 	if cli_, ok := r.clients.Value(id); ok {
-		return cli_.(twsserver.Client), true
+		return cli_.(*twsserver.Conn), true
 	} else {
 		return nil, false
 	}
 }
 
-func (r *Room) Clients(ids []int64) twsserver.ClientGroup {
+func (r *Room) Clients(ids []int64) *twsserver.ConnGroup {
 	ids_ := make([]interface{}, len(ids))
 	for i, id := range ids {
 		ids_[i] = id
@@ -132,10 +132,10 @@ func (r *Room) Clients(ids []int64) twsserver.ClientGroup {
 			clis = append(clis, clis_[i])
 		}
 	}
-	return twsserver.NewClientGroup(clis)
+	return twsserver.NewConnGroup(clis)
 }
 
-func (r *Room) ClientId(cli twsserver.Client) (int64, bool) {
+func (r *Room) ClientId(cli *twsserver.Conn) (int64, bool) {
 	if id_, ok := r.clients.Key(cli); ok {
 		return id_.(int64), true
 	} else {
@@ -143,7 +143,7 @@ func (r *Room) ClientId(cli twsserver.Client) (int64, bool) {
 	}
 }
 
-func (r *Room) User(cli twsserver.Client) (int64, bool) {
+func (r *Room) User(cli *twsserver.Conn) (int64, bool) {
 	if uid_, ok := r.who.User(cli); ok {
 		return uid_.(int64), true
 	} else {

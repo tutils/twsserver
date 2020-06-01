@@ -14,45 +14,29 @@ import (
 	"time"
 )
 
-type Writer interface {
-	Write(cmd string, seq int64, data interface{}, code int32, msg string, immed bool)
-}
-
-type Client interface {
-	Writer
-	ContextValue(key interface{}) interface{}
-	AddContextValue(key, value interface{})
-	Close()
-}
-
-type ClientGroup interface {
-	Writer
-	Clients(output *[]Client)
-}
-
 var (
 	leftSB  = &bytesBuffer{b: []byte("[")}
 	rightSB = &bytesBuffer{b: []byte("]")}
 	comma   = &bytesBuffer{b: []byte(",")}
 )
 
-type clientGroup struct {
-	clients []interface{}
+type ConnGroup struct {
+	conns []interface{}
 }
 
-func (cg *clientGroup) Clients(output *[]Client) {
-	if size := len(cg.clients); cap(*output) < size {
-		*output = make([]Client, size)
+func (cg *ConnGroup) Conns(output *[]*Conn) {
+	if size := len(cg.conns); cap(*output) < size {
+		*output = make([]*Conn, size)
 	} else {
 		*output = (*output)[:size]
 	}
-	for i, o := range cg.clients {
-		(*output)[i] = o.(Client)
+	for i, o := range cg.conns {
+		(*output)[i] = o.(*Conn)
 	}
 }
 
-func (cg *clientGroup) Write(cmd string, seq int64, data interface{}, code int32, msg string, immed bool) {
-	if len(cg.clients) == 0 {
+func (cg *ConnGroup) Write(cmd string, seq int64, data interface{}, code int32, msg string, immed bool) {
+	if len(cg.conns) == 0 {
 		return
 	}
 
@@ -64,28 +48,28 @@ func (cg *clientGroup) Write(cmd string, seq int64, data interface{}, code int32
 		Data: EncodeData(data),
 	}
 
-	log.Println("clientgroup begin to encode")
-	buf := newMultiRefBuffer(int32(len(cg.clients)))
+	//log.Println("conngroup begin to encode")
+	buf := newMultiRefBuffer(int32(len(cg.conns)))
 	if err := json.NewEncoder(buf).Encode(rspData); err != nil {
 		return
 	}
 
-	log.Println("clientgroup begin to write")
-	for _, c := range cg.clients {
-		cli := c.(*client)
-		cli.write(buf, immed)
+	//log.Println("conngroup begin to write")
+	for _, c := range cg.conns {
+		conn := c.(*Conn)
+		conn.write(buf, immed)
 	}
-	log.Println("clientgroup write complete")
+	//log.Println("conngroup write complete")
 }
 
-func NewClientGroup(clients []interface{}) ClientGroup {
-	cg := &clientGroup{
-		clients,
+func NewConnGroup(conns []interface{}) *ConnGroup {
+	cg := &ConnGroup{
+		conns,
 	}
 	return cg
 }
 
-type client struct {
+type Conn struct {
 	svc         *server
 	conn        *websocket.Conn
 	ctx         context.Context
@@ -97,24 +81,29 @@ type client struct {
 	sendTimeout time.Duration
 }
 
-func (c *client) ContextValue(key interface{}) interface{} {
+func (c *Conn) ContextValue(key interface{}) interface{} {
 	return c.ctx.Value(key)
 }
 
-func (c *client) AddContextValue(key, value interface{}) {
+func (c *Conn) AddContextValue(key, value interface{}) {
 	c.ctx = context.WithValue(c.ctx, key, value)
 }
 
-func (c *client) Close() {
+func (c *Conn) Close() {
 	_ = c.conn.Close()
 }
 
-func (c *client) shutdown() {
+func (c *Conn) shutdown() {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
 		return
 	}
+
+	for _, bs := range c.writeq {
+		bs.Unref()
+	}
+	c.writeq = c.writeq[:0]
 
 	_ = c.conn.Close()
 	//c.writeTimer.Reset(0)
@@ -126,7 +115,7 @@ func (c *client) shutdown() {
 	}
 }
 
-func (c *client) Write(cmd string, seq int64, data interface{}, code int32, msg string, immed bool) {
+func (c *Conn) Write(cmd string, seq int64, data interface{}, code int32, msg string, immed bool) {
 	rspData := &ResponseData{
 		Cmd:  cmd,
 		Seq:  seq,
@@ -142,7 +131,7 @@ func (c *client) Write(cmd string, seq int64, data interface{}, code int32, msg 
 	c.write(buf, immed)
 }
 
-func (c *client) write(jsonStr multiRefBytesBuffer, immed bool) {
+func (c *Conn) write(jsonStr multiRefBytesBuffer, immed bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -164,7 +153,7 @@ func (c *client) write(jsonStr multiRefBytesBuffer, immed bool) {
 	}
 }
 
-func (c *client) swap(writer io.Writer) (closed bool) {
+func (c *Conn) swap(writer io.Writer) (closed bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -185,8 +174,8 @@ func (c *client) swap(writer io.Writer) (closed bool) {
 	return false
 }
 
-func (c *client) send(data []byte) error {
-	//log.Debugf("%09d sent Response: %s", time.Now().UnixNano()%int64(time.Second), data)
+func (c *Conn) send(data []byte) error {
+	//log.Printf("%09d sent Response: %s", time.Now().UnixNano()%int64(time.Second), data)
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	if c.sendTimeout > 0 {
@@ -195,7 +184,7 @@ func (c *client) send(data []byte) error {
 	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func (c *client) ping() error {
+func (c *Conn) ping() error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	if c.sendTimeout > 0 {
@@ -204,11 +193,11 @@ func (c *client) ping() error {
 	return c.conn.WriteMessage(websocket.PingMessage, nil)
 }
 
-func (c *client) run() error {
-	//log.Info("run start")
+func (c *Conn) run() error {
+	//log.Println("run start")
 	defer func() {
 		c.shutdown()
-		//log.Info("run complete")
+		//log.Println("run complete")
 	}()
 
 	if c.svc.opt.openHandler != nil {
@@ -229,9 +218,9 @@ func (c *client) run() error {
 		if err := c.conn.ReadJSON(&reqDatas); err != nil {
 			if !websocket.IsCloseError(err) || websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				// 意外的错误
-				//log.Error(err)
+				log.Println(err)
 			} else {
-				//log.Debug(err)
+				//log.Println(err)
 			}
 			return err
 		}
@@ -239,15 +228,15 @@ func (c *client) run() error {
 		for _, reqData := range reqDatas {
 			if reqData == nil {
 				err := errors.New("nil request")
-				//log.Error(err)
+				log.Println(err)
 				return err
 			}
-			//log.Debugf("%09d received request: %v", time.Now().UnixNano()%int64(time.Second), reqData)
+			//log.Printf("%09d received request: %v", time.Now().UnixNano()%int64(time.Second), reqData)
 
 			handler := c.svc.opt.mux.Handler(reqData.Cmd)
 			req := &request{
 				data: reqData,
-				cli:  c,
+				conn: c,
 			}
 			rsp := &response{
 				data: &ResponseData{
@@ -257,13 +246,13 @@ func (c *client) run() error {
 			}
 			if err := handler(req, rsp); err != nil {
 				// 发生错误关闭连接
-				//log.Error(err)
+				log.Println(err)
 				return err
 			}
 
 			buf.Reset()
 			if err := en.Encode(rsp.data); err != nil {
-				//log.Error(err)
+				log.Println(err)
 				return err
 			}
 			buf.Ref(1)
@@ -272,7 +261,7 @@ func (c *client) run() error {
 	}
 }
 
-func newClient(svc *server, conn *websocket.Conn, recvWait time.Duration, sendWait time.Duration, tcpKeepAlive bool) *client {
+func newConn(svc *server, conn *websocket.Conn, recvWait time.Duration, sendWait time.Duration, tcpKeepAlive bool) *Conn {
 	if tcpKeepAlive {
 		if sock, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
 			sock.SetKeepAlive(true)
@@ -280,7 +269,7 @@ func newClient(svc *server, conn *websocket.Conn, recvWait time.Duration, sendWa
 		}
 	}
 
-	c := &client{
+	c := &Conn{
 		svc:         svc,
 		conn:        conn,
 		ctx:         context.Background(),
@@ -314,12 +303,16 @@ func (b *multiRefBuffer) Unref() {
 		}
 		b.Reset()
 		jsonStrPoolBuffer.Put(b)
+		//debugNum := atomic.AddInt32(&debugNumOfBuffers, -1)
+		//log.Printlnf("cur debugNumOfBuffers: %d", debugNum)
 	}
 }
 
+//var debugNumOfBuffers int32
 var jsonStrPoolBuffer = &sync.Pool{New: func() interface{} { return &multiRefBuffer{} }}
 
 func newMultiRefBuffer(ref int32) *multiRefBuffer {
+	//atomic.AddInt32(&debugNumOfBuffers, 1)
 	buf := jsonStrPoolBuffer.Get().(*multiRefBuffer)
 	buf.Ref(ref)
 	return buf

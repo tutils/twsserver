@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/gorilla/websocket"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -28,8 +29,8 @@ var (
 )
 
 type UpgradeHandler func(req *http.Request) error
-type OpenHandler func(cli Client) error
-type CloseHandler func(cli Client)
+type OpenHandler func(cli *Conn) error
+type CloseHandler func(cli *Conn)
 type HandlerFunc func(req Request, rsp Response) error
 
 func Error(rsp Response, code int32, msg string, closeConnection bool) error {
@@ -106,27 +107,27 @@ func newDefaultServeMux() *ServeMux {
 type server struct {
 	opt *Options
 
-	ready chan *client
+	ready chan *Conn
 
 	mu      sync.Mutex
-	clients map[*client]struct{}
+	clients map[*Conn]struct{}
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.opt.upgradeHandler != nil {
 		if err := s.opt.upgradeHandler(r); err != nil {
-			//log.Error(err)
+			log.Println(err)
 			return
 		}
 	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		//log.Error(err)
+		log.Println(err)
 		return
 	}
-	//log.Info("new client has connected", r.Header)
+	//log.Println("new client has connected", r.Header)
 
-	cli := newClient(s, conn, s.opt.recvTimeout, s.opt.sendTimeout, false)
+	cli := newConn(s, conn, s.opt.recvTimeout, s.opt.sendTimeout, false)
 	s.mu.Lock()
 	s.clients[cli] = struct{}{}
 	s.mu.Unlock()
@@ -134,7 +135,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) writePump() {
-	buf := &bytes.Buffer{} // TODO: use wswriter directly
+	buf := new(bytes.Buffer)
 	for {
 		select {
 		case cli, ok := <-s.ready:
@@ -170,8 +171,8 @@ func Server(opts ...Option) WritePumpHttpHandler {
 
 	s := &server{
 		opt:     opt,
-		ready:   make(chan *client, 100000),
-		clients: make(map[*client]struct{}),
+		ready:   make(chan *Conn, 100000),
+		clients: make(map[*Conn]struct{}),
 	}
 	return s
 }
